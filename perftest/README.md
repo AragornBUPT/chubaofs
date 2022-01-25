@@ -1,18 +1,18 @@
-# ChubaoFS Perftest scripts
+# CubeFS Perftest scripts
 
-## 1. 环境准备
+## 1. ENVIRONMENT
 
-### 准备测试服务集群
+### Prepare Perftest Cluster
 
-准备一个已经部署好的 chubaofs 服务集群, 集群部署好后, 创建一个供测试的卷.
+Prepare a deployed CubeFS cluster and a volume for test.
 
-### 准备测试客户机集群
+### Prepare Test-Client Cluster
 
-为便于管理, 可在每台测试客户机上安装 saltstack 进行统一部署, 步骤如下:
+For ease of operation, salt-stack should be installed on each test-client. The steps are as follows:
 
-1. 配置 salt-master
+#### 1. Configure salt-master
 
-找一台机器作为 salt-master
+Select one machine as salt-master.
 
 ```shell
 $ yum install -y salt-master
@@ -21,40 +21,40 @@ $ echo "  cfs-perftest-client: '*perftest-client*'" >> /etc/salt/master.d/chubao
 $ salt-master start -d
 ```
 
-2. 配置 salt-minion
+#### 2. Configure salt-minion
 
-将 install/init-minion.sh 拷贝到各节点上,执行如下命令:
+Copy install/init-minion.sh to all minion nodes. And execute the following commands:
 
 ```shell
-# 安装killall命令
+# install killall
 $ yum -y install psmisc
 
 $ export SALT_MASTER=xxx.xx.xx.xx
 $ install/init-minion.sh
 ```
 
-确认各节点 salt-minion 加入到 master, master 上执行:
+Confirm all salt-minion nodes are administered by master. And execute commands on master:
 
 ```shell
 $ salt -N 'cfs-perftest-client' test.ping
 
-# 如果测试结果为空，查看是否有Unaccepted Keys
+# If ping result is empty, check if exist Unaccepted Keys.
 $ salt-key
  
-# 如果有Unaccepted Keys，则接受连接
+# If Unaccepted Keys exist, accept the connection requests.
 $ salt-key -A
  
-# 如果仍然没有，分别在master和minion查看日志/var/log/salt/master或/var/log/salt/minion
+# If ping result is still empty，please check the log on master and minion separately. 
+# Master log path: /var/log/salt/master
+# Minion log path: /var/log/salt/minion 
 ```
 
-- SALT_MASTER 为 salt master 节点 ip;
-- minion的id取值顺序: /etc/salt/minion -> /etc/salt/minion_id -> 本机hostname;
+- The value of Variable SALT_MASTER is the ip of salt-master
+- Value order of salt-minion id: /etc/salt/minion > /etc/salt/minion_id > hostname
 
-3. 安装测试工具;
+#### 3. Install Perftest Tools
 
-将 install 目录 cp 到 salt-master 的/srv/salt/perftest/
-
-最终目录结构如下
+Copy directory /install to /srv/salt/perftest/. The final directory structure is as follows:
 
 ```
 srv
@@ -84,7 +84,8 @@ srv
 |  |    |  └cfs-client
 ```
 
-- install/install-rsh.sh 文件用 rsh 来提供 mpi 通信的, 如果需要,需更改里面 ip 为各节点间的 ip
+- File install/install-rsh.sh is used to provide mpi communication. If needed, please change the ips to the ips of
+  salt-minions
 
 ```shell
 $ mkdir -p /srv /srv/salt/perftest/script/
@@ -96,10 +97,10 @@ $ cp -rf pkg/ /srv/salt/perftest/pkg
 $ bash /srv/salt/perftest/install/install-perftest.sh
 ```
 
-### 准备测试卷
+### Mount CubeFS test volume
 
-- 将 cfs-client 置于/srv/salt/perftest/bin/cfs-client
-- 将 client.json 置于/srv/salt/perftest/conf/client.json
+- Place cfs-client to /srv/salt/perftest/bin/cfs-client
+- Place client.json to /srv/salt/perftest/conf/client.json
 
 ```shell
 $ cd /srv
@@ -107,28 +108,28 @@ $ script/perftest.sh install
 $ script/perftest.sh mount_cfs
 ```
 
-## 2. 测试
+## 2. TEST
 
-### perftest with saltstack
+### Perftest with salt-stack
 
 ```shell
-# 执行fio测试用例，需先修改mpi_host
+# Before use fio script, mpi_host should be configured.
 $ cd /srv ; script/perftest.sh fio_test
 
-# 执行mdtest op测试用例
+# Execute mdtest op
 $ script/perftest.sh mdtest_op
 
-# 执行mdtest small测试用例
+# Execute mdtest small
 $ script/perftest.sh mdtest_small
 ```
 
-## 3. 获取测试报告
+## 3. REPORT
 
 ```shell
-# 获取fio测试报告
+# Get fio test report
 $ ./perftest.sh print_fio_report
 
 
-# 获取mdtest测试报告
+# Get mdtest report
 $ ./perftest.sh print_mdtest_report
 ```
