@@ -14,15 +14,15 @@
 # implied. See the License for the specific language governing
 # permissions and limitations under the License.
 
-MntPoint=/cfs/mnt
-mkdir -p /cfs/bin /cfs/log /cfs/mnt
+MntPointList=(/cfs/mnt /cfs/mnt2)
+mkdir -p /cfs/bin /cfs/log /cfs/mnt /cfs/mnt2
 src_path=/go/src/github.com/chubaofs/cfs
 cli=/cfs/bin/cfs-cli
 conf_path=/cfs/conf
 
 Master1Addr="192.168.0.11:17010"
 LeaderAddr=""
-VolName=ltptest
+VolNameList=(ltptest s3test)
 Owner=ltptest
 AccessKey=39bEF4RrAQgMj6RV
 SecretKey=TRL6o3JL16YOqvZGIohBDFTHZDEcFsyd
@@ -87,20 +87,23 @@ create_cluster_user() {
     exit 1
 }
 
-create_volume() {
-    echo -n "Creating volume   ... "
-    # check volume exist
-    ${cli} volume info ${VolName} &> /dev/null
-    if [[ $? -eq 0 ]]; then
+create_volumes() {
+    echo "Creating volumes ..."
+    for volName in ${VolNameList[*]}; do
+        echo ${volName}
+        # check volume exists
+        ${cli} volume info ${volName} &> /dev/null
+        if [[ $? -eq 0 ]]; then
+            echo -e "\033[32mdone\033[0m"
+            continue
+        fi
+        ${cli} volume create ${volName} ${Owner} --capacity=15 -y > /dev/null
+        if [[ $? -ne 0 ]]; then
+            echo -e "\033[31mfail\033[0m"
+            exit 1
+        fi
         echo -e "\033[32mdone\033[0m"
-        return
-    fi
-    ${cli} volume create ${VolName} ${Owner} --capacity=30 -y > /dev/null
-    if [[ $? -ne 0 ]]; then
-        echo -e "\033[31mfail\033[0m"
-        exit 1
-    fi
-    echo -e "\033[32mdone\033[0m"
+    done
 }
 
 show_cluster_info() {
@@ -113,14 +116,14 @@ show_cluster_info() {
     echo &>> ${tmp_file}
     ${cli} user info ${Owner} &>> ${tmp_file}
     echo &>> ${tmp_file}
-    ${cli} volume info ${VolName} &>> ${tmp_file}
+    ${cli} volume info ${VolNameList[0]} &>> ${tmp_file}
     echo &>> ${tmp_file}
     cat /tmp/collect_cluster_info | grep -v "Master address"
 }
 
 add_data_partitions() {
     echo -n "Increasing DPs    ... "
-    ${cli} vol add-dp ${VolName} 20 &> /dev/null
+    ${cli} vol add-dp ${VolNameList[0]} 20 &> /dev/null
     if [[ $? -eq 0 ]] ; then
         echo -e "\033[32mdone\033[0m"
         return
@@ -130,30 +133,43 @@ add_data_partitions() {
 }
 
 print_error_info() {
-    echo "------ err ----"
-    cat /cfs/log/cfs.out
-    cat /cfs/log/client/client_info.log
-    cat /cfs/log/client/client_error.log
-    cat /cfs/log/client/client_warn.log
+    echo "---${VolNameList[$1]} err ----"
+    cat /cfs/log/${VolNameList[$1]}/cfs.out
+    cat /cfs/log/${VolNameList[$1]}/client/client_info.log
+    cat /cfs/log/${VolNameList[$1]}/client/client_error.log
+    cat /cfs/log/${VolNameList[$1]}/client/client_warn.log
     curl -s "http://$LeaderAddr/admin/getCluster" | jq
     mount
     df -h
-    stat $MntPoint
-    ls -l $MntPoint
-    ls -l $LTPTestDir
+    stat ${MntPoint[$1]}
+    ls -l ${MntPoint[$1]}
+    if [ $1 -eq 0 ]; then
+        ls -l $LTPTestDir
+    fi
 }
 
-start_client() {
-    echo -n "Starting client   ... "
-    nohup /cfs/bin/cfs-client -c /cfs/conf/client.json >/cfs/log/cfs.out 2>&1 &
-    sleep 10
-    res=$( stat $MntPoint | grep -q "Inode: 1" ; echo $? )
-    if [[ $res -ne 0 ]] ; then
-        echo -e "\033[31mfail\033[0m"
-        print_error_info
-        exit $res
-    fi
-    echo -e "\033[32mdone\033[0m"
+start_clients() {
+    for (( i = 0; i < ${#VolNameList[@]}; i++ )); do
+        if [ $i -eq 0 ]; then
+            echo -n "Starting client  ..."
+            clientConf=/cfs/conf/client.json
+            clientLog=/cfs/log/cfs.out
+        else
+            k=$[${i}+1]
+            echo -n "Starting client${k}  ..."
+            clientConf=/cfs/conf/client${k}.json
+            clientLog=/cfs/log/cfs${k}.out
+        fi
+        nohup /cfs/bin/cfs-client -c ${clientConf} >${clientLog} 2>&1 &
+        sleep 10
+        res=$( stat ${MntPointList[i]} | grep -q "Inode: 1"; echo $? )
+        if [[ $res -ne 0 ]]; then
+            echo -e "\033[31mfail\033[0m"
+            print_error_info ${i}
+            exit $res
+        fi
+        echo -e "\033[32mdone\033[0m"
+    done
 }
 
 wait_proc_done() {
@@ -209,27 +225,41 @@ run_ltptest() {
     echo "************************";
     echo "        LTP test        ";
     echo "************************";
-    LTPTestDir=$MntPoint/ltptest
+    LTPTestDir=${MntPoint[0]}/ltptest
     LtpLog=/tmp/ltp.log
     mkdir -p $LTPTestDir
     nohup /bin/sh -c " /opt/ltp/runltp  -f fs -d $LTPTestDir > $LtpLog 2>&1; echo $? > /tmp/ltpret " &
     wait_proc_done "runltp" $LtpLog
 }
 
-stop_client() {
-    echo -n "Stopping client   ... "
-    umount ${MntPoint} && echo -e "\033[32mdone\033[0m" || { echo -e "\033[31mfail\033[0m"; exit 1; }
+stop_clients() {
+    for (( i = 0; i < ${#MntPointList[@]}; i++ )); do
+        k=$[${i}+1]
+        if [ $i -eq 0 ]; then
+            echo -n "Stopping client   ... "
+        else
+            echo -n "Stopping client${k}   ... "
+        fi
+        umount ${MntPointList[i]} && echo -e "\033[32mdone\033[0m" || { echo  -e "\033[31mfail\033[0m"; exit 1; }
+    done
 }
 
-delete_volume() {
-    echo -n "Deleting volume   ... "
-    ${cli} volume delete ${VolName} -y &> /dev/null
-    if [[ $? -eq 0 ]]; then
-        echo -e "\033[32mdone\033[0m"
-        return
-    fi
-    echo -e "\033[31mfail\033[0m"
-    exit 1
+delete_volumes() {
+    for (( i = 0; i < n; i++ )); do
+        k=$[${i}+1]
+        if [ $i -eq 0 ]; then
+            echo -n "Deleting volume   ... "
+        else
+            echo -n "Deleting volume${k}   ... "
+        fi
+        ${cli} volume delete ${VolNameList[i]} -y &> /dev/null
+        if [[ $? -eq 0 ]]; then
+            echo -e "\033[32mdone\033[0m"
+            return
+        fi
+        echo -e "\033[31mfail\033[0m"
+        exit 1
+    done
 }
 
 run_s3_test() {
@@ -260,10 +290,21 @@ run_s3_test() {
     fi
     echo -e "\033[32mdone\033[0m"
 
+    sed -i "s/BUCKET = 's3test'/BUCKET = 'ltptest'/g" ${work_path}/env.py
     python3 -m unittest2 discover ${work_path} "*.py" -v
     if [[ $? -ne 0 ]]; then
         exit 1
     fi
+    echo "Test bucket ltptest succeeded!"
+
+    sed -i "s/BUCKET = 'ltptest'/BUCKET = 's3test'/g" ${work_path}/env.py
+    python3 -m unittest2 discover ${work_path} "*.py" -v
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    echo "Test bucket s3test succeeded!"
+
+    sed -i "s/BUCKET = 's3test'/BUCKET = 'ltptest'/g" ${work_path}/env.py
 }
 
 init_cli
@@ -271,11 +312,11 @@ check_cluster
 create_cluster_user
 ensure_node_writable "metanode"
 ensure_node_writable "datanode"
-create_volume ; sleep 2
+create_volumes ; sleep 2
 add_data_partitions ; sleep 3
 show_cluster_info
-start_client ; sleep 2
+start_clients ; sleep 2
 run_ltptest
 run_s3_test
-stop_client
-delete_volume
+stop_clients
+delete_volumes
